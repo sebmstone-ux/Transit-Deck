@@ -6,6 +6,8 @@
     <title>TransitDeck — Custom Transport TCG Collector</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- localForage for high-capacity IndexedDB storage -->
+    <script src="https://cdn.jsdelivr.net/npm/localforage@1.10.0/dist/localforage.min.js"></script>
     <!-- Font Awesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <!-- Google Fonts: Inter & JetBrains Mono -->
@@ -369,7 +371,7 @@
                                     Remove Photo
                                 </button>
                             </div>
-                            <p class="text-[11px] text-slate-500 mt-1">Automatically compressed for browser storage. If no photo is uploaded, a sleek category emblem is used.</p>
+                            <p class="text-[11px] text-slate-500 mt-1">Saved in high-capacity browser IndexedDB storage. If no photo is uploaded, a sleek category emblem is used.</p>
                         </div>
 
                         <!-- Starter Copy Checkbox -->
@@ -507,7 +509,7 @@
             </div>
 
             <p class="text-xs text-slate-400 leading-relaxed">
-                Your custom cards, coins, and unlocked collection are saved automatically in this browser. Export a backup file anytime to move or protect your created cards.
+                Your custom cards, coins, and unlocked collection are saved automatically in high-capacity IndexedDB browser storage. Export a backup file anytime to move or protect your created cards.
             </p>
 
             <!-- Export / Import Buttons -->
@@ -542,6 +544,12 @@
     <script>
         // ==================== CONFIGURATION & CONSTANTS ====================
         const STORAGE_KEY = 'transitdeck_zero_premade_v1';
+
+        // Configure localForage (IndexedDB) for multi-gigabyte storage
+        localforage.config({
+            name: 'TransitDeckDB',
+            storeName: 'transitdeck_store'
+        });
 
         // Zero pre-made cards by design
         const BUILTIN_CARDS = [];
@@ -657,11 +665,23 @@
         let inspectedCardId = null;
         let pendingDeleteCardId = null;
 
-        function loadGameState() {
+        async function loadGameState() {
             try {
-                const raw = localStorage.getItem(STORAGE_KEY);
-                if (raw) {
-                    const parsed = JSON.parse(raw);
+                // 1. Load from IndexedDB (localForage)
+                let parsed = await localforage.getItem(STORAGE_KEY);
+
+                // 2. Automatically migrate any existing save from old localStorage
+                if (!parsed) {
+                    const raw = localStorage.getItem(STORAGE_KEY);
+                    if (raw) {
+                        parsed = JSON.parse(raw);
+                        await localforage.setItem(STORAGE_KEY, parsed);
+                        localStorage.removeItem(STORAGE_KEY);
+                    }
+                }
+
+                // 3. Apply loaded save state
+                if (parsed) {
                     gameState.coins = typeof parsed.coins === 'number' ? parsed.coins : 500;
                     gameState.inventory = parsed.inventory && typeof parsed.inventory === 'object' ? parsed.inventory : {};
                     gameState.customCards = Array.isArray(parsed.customCards) ? parsed.customCards : [];
@@ -671,11 +691,12 @@
             }
         }
 
-        function saveGameState() {
+        async function saveGameState() {
             try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(gameState));
+                await localforage.setItem(STORAGE_KEY, gameState);
             } catch (err) {
-                showToast('Browser storage is full! Try using smaller photos or exporting a backup.', 'error');
+                console.error('Error saving state:', err);
+                showToast('Storage error! Try exporting a backup.', 'error');
             }
             updateHeaderStats();
         }
@@ -909,7 +930,6 @@
         }
 
         function pickCardFromPool(pool, targetRarity) {
-            // Find cards matching target rarity; if none exist in user's custom pool, fallback gracefully to nearest available rarity
             const exact = pool.filter(c => c.rarity === targetRarity);
             if (exact.length > 0) {
                 return exact[Math.floor(Math.random() * exact.length)];
@@ -938,11 +958,9 @@
                 return;
             }
 
-            // Deduct cost
             gameState.coins -= pack.cost;
             activePackId = packId;
 
-            // Generate pulls
             const pulls = [];
             for (let i = 0; i < pack.cardsCount; i++) {
                 let targetRarity = rollRarityFromOdds(pack.odds);
@@ -1071,7 +1089,6 @@
             const allCards = getAllCards();
             const grid = document.getElementById('collection-grid');
 
-            // Update Binder Summary & Sell All Duplicates Button
             const uniqueOwned = allCards.filter(c => (gameState.inventory[c.id] || 0) > 0).length;
             const totalCopies = allCards.reduce((sum, c) => sum + (gameState.inventory[c.id] || 0), 0);
             document.getElementById('binder-summary-text').textContent =
@@ -1083,7 +1100,6 @@
             document.getElementById('sell-all-dupes-label').textContent =
                 `Sell All Duplicates (${totalDupes}) (+${totalCoins.toLocaleString()} Coins)`;
 
-            // Empty pool state
             if (allCards.length === 0) {
                 grid.innerHTML = `
                 <div class="col-span-full py-16 px-4 text-center bg-slate-900/60 border border-slate-800 rounded-2xl space-y-4">
@@ -1103,7 +1119,6 @@
                 return;
             }
 
-            // Apply Filters
             const search = document.getElementById('filter-search').value.toLowerCase().trim();
             const cat = document.getElementById('filter-category').value;
             const era = document.getElementById('filter-era').value;
@@ -1202,10 +1217,9 @@
             reader.onload = function (e) {
                 const img = new Image();
                 img.onload = function () {
-                    // Resize & compress image via Canvas so localStorage holds dozens of custom photos smoothly
                     const canvas = document.createElement('canvas');
-                    const maxW = 640;
-                    const maxH = 420;
+                    const maxW = 800;
+                    const maxH = 520;
                     let width = img.width;
                     let height = img.height;
 
@@ -1220,7 +1234,7 @@
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, width, height);
 
-                    uploadedPhotoDataUrl = canvas.toDataURL('image/jpeg', 0.78);
+                    uploadedPhotoDataUrl = canvas.toDataURL('image/jpeg', 0.82);
                     document.getElementById('photo-upload-label').textContent = file.name;
                     document.getElementById('clear-photo-btn').classList.remove('hidden');
                     updateCreatorPreview();
@@ -1285,7 +1299,6 @@
             renderPacks();
             renderCardPoolManager();
 
-            // Reset form
             document.getElementById('custom-name').value = '';
             document.getElementById('custom-subtitle').value = '';
             clearUploadedPhoto();
@@ -1467,14 +1480,15 @@
             showToast('Reset coins to 500 and cleared binder progress (kept your custom cards).', 'info');
         }
 
-        function factoryResetAll() {
+        async function factoryResetAll() {
             localStorage.removeItem(STORAGE_KEY);
+            await localforage.removeItem(STORAGE_KEY);
             gameState = {
                 coins: 500,
                 inventory: {},
                 customCards: []
             };
-            saveGameState();
+            await saveGameState();
             renderPacks();
             renderCollection();
             renderCardPoolManager();
@@ -1520,8 +1534,11 @@
         }
 
         // ==================== INITIALIZATION ====================
-        window.onload = function () {
-            loadGameState();
+        window.onload = async function () {
+            if (navigator.storage && navigator.storage.persist) {
+                navigator.storage.persist();
+            }
+            await loadGameState();
             updateHeaderStats();
             renderPacks();
             updateCreatorPreview();
